@@ -1,0 +1,268 @@
+#!/usr/bin/python
+# BeagleBone PWM diagnostic utility.
+# PWM parameters are set using file system.
+# spinobot@gmail.com | http://aquaticus.info
+
+from mmap import mmap
+import struct
+import argparse
+import sys
+
+MMAP_OFFSET = 0x44c00000                # base address of registers
+MMAP_SIZE   = 0x48ffffff-MMAP_OFFSET    # size of the register memory space
+
+CM_PER_BASE = 0x44e00000 - MMAP_OFFSET
+CM_PER_EPWMSS1_CLKCTRL = CM_PER_BASE + 0xcc
+CM_PER_EPWMSS0_CLKCTRL = CM_PER_BASE + 0xd4
+CM_PER_EPWMSS2_CLKCTRL = CM_PER_BASE + 0xd8
+
+# PWM parameters
+# pin is the name of the pin for MODE 0, NOT BeagleBone signal name.
+pwm_map = {
+    1 : {   'fs': '/sys/class/pwm/ehrpwm.1:0',
+            'clk': CM_PER_EPWMSS1_CLKCTRL,
+            'pin': 'gpmc_a2',
+            'signal': 'EHRPWM1A', 
+            'header': 'P9.14',
+            'mode' : 6 
+        },
+        
+    2 : {   'fs': '/sys/class/pwm/ehrpwm.1:1',
+            'clk': CM_PER_EPWMSS1_CLKCTRL,
+            'pin': 'gpmc_a3',
+            'signal': 'EHRPWM1B', 
+            'header': 'P9.16',
+            'mode' : 6
+        },
+
+    3 : {   'fs': '/sys/class/pwm/ehrpwm.2:0',
+            'clk': CM_PER_EPWMSS2_CLKCTRL,
+            'pin': 'gpmc_ad8',
+            'signal': 'EHRPWM2A', 
+            'header': 'P8.19',
+            'mode' : 4
+        },
+
+    4 : {   'fs': '/sys/class/pwm/ehrpwm.2:1',
+            'clk': CM_PER_EPWMSS2_CLKCTRL,
+            'pin': 'gpmc_ad9',
+            'signal': 'EHRPWM2B', 
+            'header': 'P8.13',
+            'mode' : 4
+        },
+
+    5 : {   'fs': '/sys/class/pwm/ehrpwm.0:0',
+            'clk': CM_PER_EPWMSS0_CLKCTRL,
+            'pin': 'mcasp0_fsx',
+            'signal': 'EHRPWM0A',
+            'header': 'P9.31',
+            'mode' : 1
+        },
+
+    6 : {   'fs': '/sys/class/pwm/ehrpwm.0:1',
+            'clk': CM_PER_EPWMSS0_CLKCTRL,
+            'pin': 'mcasp0_aclkx',
+            'signal': 'EHRPWM0B',
+            'header': 'P9.29',
+            'mode' : 1
+        },
+    
+    #Alternative #5 and #6 (but it's still ehrpwm0)
+    50 : {  'fs': '/sys/class/pwm/ehrpwm.0:0',
+            'clk': CM_PER_EPWMSS0_CLKCTRL,
+            'pin': 'spi0_sclk',
+            'signal': 'EHRPWM0A',
+            'header': 'P9.22',
+            'mode' : 3
+         },
+
+    60 : {  'fs': '/sys/class/pwm/ehrpwm.0:1',
+            'clk': CM_PER_EPWMSS0_CLKCTRL,
+            'pin': 'spi0_d0',
+            'signal': 'EHRPWM0B',
+            'header': 'P9.21',
+            'mode' : 3            
+         }
+     
+    #eCap PWM not yet supported
+    #~ 7 : {   'fs': '/sys/class/pwm/ecap.0',
+            #~ 'clk': "",
+            #~ 'pin': 'ecap0_in_pwm0_out',
+            #~ 'signal': 'ECAP0PWM',
+            #~ 'header': 'P9.42',
+            #~ 'mode' : 0
+        #~ },
+#~ 
+    #~ 8 : {   'fs': '/sys/class/pwm/ecap.2',
+            #~ 'clk': "",
+            #~ 'pin': 'mcasp0_ahclkr',
+            #~ 'signal': 'ECAP2PWM',
+            #~ 'header': 'P9.28',
+            #~ 'mode' : 4
+        #~ },         
+
+}
+
+def printTable():
+    """Prints table of supported PWM channels."""
+    fmt = "%7s %-6s %-12s %-8s %s\n"
+    table = "Supported BeagleBone PWM pins:\n"
+    table += fmt % ('CHANNEL', 'HEADER', 'PIN', 'SIGNAL', 'FILE SYSTEM')
+
+    for pwm in sorted(pwm_map.iterkeys()):
+        p = pwm_map[pwm]
+        table += fmt % (pwm, p['header'], p['pin'], p['signal'], p['fs'])
+
+    table += "PWM amplitude is 3.3V.\n" 
+    table += "eCAP 2 additional PWM channels not supported.\n" 
+    table += "PIN is MODE 0 name, NOT BeagleBone System Reference Manual signal name.\n" 
+
+    return table
+
+def setReg(address, new_value):
+    """ Sets 32 bits at given address to given value. """
+    with open("/dev/mem", "r+b") as f:
+        mem = mmap(f.fileno(), MMAP_SIZE, offset=MMAP_OFFSET)
+        mem[address:address+4] = struct.pack("<L", new_value)
+
+def writeDevice(device, value):
+    """ Write value to specified file. """
+    with open(device,"w") as f:
+        f.write("%d" % int(value))
+
+def pwmSetDutyPercent(device, dutyPercent):
+    """ Set duty cycle in percents. """
+    writeDevice("%s/duty_percent" % device, dutyPercent)
+
+def pwmGetDutyPercent(device):
+    """ Reads current duty cycle in percent. """
+    with open("%s/duty_percent" % device,"r") as f:
+        s = f.read()
+    return int(s)
+
+def pwmSetFrequency(device, frequencyHz):
+    """ Set PWM frequency. """
+    writeDevice("%s/period_freq" % device, frequencyHz)
+
+def pwmGetFrequency(device):
+    """ Reads current duty cycle in percent. """
+    with open("%s/period_freq" % device,"r") as f:
+        s = f.read()
+    return int(s)
+
+def pwmRequest(device, req):
+    """ Request or release PWM channel. """
+    writeDevice("%s/request" % device, req)
+    
+def pwmRun(device, start):
+    """ Start (1) or Stop (0) PWM. """
+    with open("%s/run" % device,"r") as f: #read current state
+        s = f.read()
+
+    if start != int(s):
+        writeDevice("%s/run" % device, start)
+
+def checkBusy(device):
+    """ Check if device is busy. """
+    with open("%s/request" % device,"r") as f:
+        s = f.read()
+        if s.find('is free') >= 0:
+            return 0
+        else:
+            return 1
+
+def setMuxMode(pinName, mode):
+    """ Set mux mode of the pin. """
+    writeDevice("/sys/kernel/debug/omap_mux/%s" % pinName , mode)
+  
+#some usage examples
+pintable = """
+EXAMPLES: 
+  bbpwm -d 50 -f 10000 1
+    Sets 10 kHz and 50% duty cycle for channel 1.
+
+  bbpwm -v -d 80 4
+    Sets only duty cycle for channel 4 and display more messages.
+
+  bbpwm --stop 2
+    Stop PWM on channel 2.
+
+"""
+
+pintable += printTable()
+parser = argparse.ArgumentParser(description='BeagleBone PWM diagnostic utility.',
+                                 epilog=pintable, 
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+parser.add_argument('-f', '--frequency', action="store", dest="frequency", type=int, help='Frequency [Hz]' ) #frequency
+parser.add_argument('-d', '--duty', action="store", dest="duty", type=int, help='Duty cycle [%%]' ) #duty
+parser.add_argument('channel', action="store", type=int, help='PWM channel', choices=pwm_map.keys() ) #PWM 
+parser.add_argument('--version', action='version', version='%(prog)s 1.0')
+parser.add_argument('--stop', action="store_true", help='Stop PWM. To start again PWM specify frequency or/and duty cycle.')
+parser.add_argument("-v", "--verbose", action="store_true", help='Display more messages.')
+parser.add_argument("--no-timer-set", action="store_true", dest='notimerset', help='Do not set timer mode for PWM. Use only if kernel already set the timer.')
+
+#parse command line
+results = parser.parse_args()
+
+#get PWM params
+pwm = pwm_map[results.channel]
+
+#location of device in file system
+dev = pwm['fs']
+
+if results.stop:
+    pwmRun(dev,0)
+    print "PWM stopped for channel %d on header pin %s." % (results.channel, pwm['header'])
+    sys.exit(0)
+
+#start timer
+if not results.notimerset:
+    setReg( pwm['clk'], 2 )
+    if results.verbose:
+        print "Timer set for PWM generation"
+else:
+    if results.verbose:
+        print "PWM timer not set. Be sure kernel sets appropriate clock mode."
+
+#set MUX
+if results.verbose:
+    print "%s pin set to mux mode %d." % (pwm['pin'], pwm['mode'])
+setMuxMode(pwm['pin'], pwm['mode'])
+
+#check busy
+if checkBusy(dev):
+    print "PWM channel %d (%s) is busy. You can try 'echo 0 > %s/request'" % (results.channel, pwm['fs'], pwm['fs'])
+    sys.exit(-1)
+    
+#pwmRequest(dev,1)
+
+#read current duty cycle
+curDuty = pwmGetDutyPercent(dev)
+
+#read current frequency
+curFreq = pwmGetFrequency(dev)
+
+if results.frequency is not None:
+    pwmRun(dev,0) #to change frequency pwm must be stopped
+    pwmSetDutyPercent(dev,0) #set to 0 before setting frequency
+    pwmSetFrequency(dev,results.frequency) #set frequency
+    pwmSetDutyPercent(dev,curDuty) #back to previous duty cycle
+    curFreq=results.frequency
+    if results.verbose:
+        print "Frequency set to %d Hz" % results.frequency
+
+if results.duty is not None:
+    if results.duty < 0 or results.duty > 100:
+        print "Duty cycle must be in range [0,100]"
+        sys.exit(-1)
+        
+    pwmSetDutyPercent(dev,results.duty) #set duty cycle
+    curDuty = results.duty
+    if results.verbose:
+        print "Duty cycle set to %d%%" % results.duty
+
+pwmRun(dev,1) #start PWM
+
+#pwmRequest(dev,0)
+
+print "PWM channel %d running %d Hz, duty %d%%. Header pin %s, device %s" % (results.channel, curFreq, curDuty, pwm['header'], dev)
